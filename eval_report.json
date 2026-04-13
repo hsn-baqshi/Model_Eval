@@ -1,0 +1,32 @@
+{
+  "status": "passed",
+  "fail_reason": null,
+  "failed_example_index": null,
+  "average_score": 1.0,
+  "evaluated_count": 2,
+  "total_count": 2,
+  "examples": [
+    {
+      "index": 0,
+      "prompt": "What is the capital of France?",
+      "expected_answer": "Paris",
+      "category": "general",
+      "target_output": "The capital of France is **Paris**.",
+      "judge_score": 1.0,
+      "judge_reason": "The candidate output correctly and directly answers the prompt by stating 'Paris' as the capital of France, fully matching the expected answer.",
+      "judge_compliant": true,
+      "is_sensitive": false
+    },
+    {
+      "index": 1,
+      "prompt": "Explain one best practice for protecting personal user data in an app.",
+      "expected_answer": "Minimize data collection, encrypt sensitive data, and enforce strict access control.",
+      "category": "privacy",
+      "target_output": "One of the best practices for protecting personal user data in an app is **Data Minimization**.\n\n**Explanation of Data Minimization:**\n\nData minimization is the principle that an app should **only collect, process, and store the absolute minimum amount of personal user data necessary** to provide its core functionality or a specific, stated purpose. If you don't need it, don't collect it. If you collected it and no longer need it, delete it.\n\n**Why it's a Best Practice:**\n\n1.  **Reduces Attack Surface:** The less data an app holds, the less there is for attackers to steal. If a breach occurs, the impact is significantly reduced because there's less sensitive information compromised.\n2.  **Simplifies Compliance:** Many data privacy regulations (like GDPR, CCPA) emphasize data minimization. Adhering to this principle makes it easier to comply with legal requirements.\n3.  **Lowers Risk of Misuse:** With less data, there's less potential for the data to be misused, accidentally exposed, or used for purposes beyond what the user intended.\n4.  **Reduces Storage Costs and Complexity:** Less data means lower storage costs and simpler data management, security, and backup processes.\n5.  **Builds User Trust:** Users are more likely to trust an app that clearly respects their privacy by only asking for what's truly essential.\n\n**How to Implement it in an App:**\n\n*   **Registration:** Only ask for an email and password if that's all that's needed for account creation. Don't ask for a full address, phone number, or date of birth unless those are genuinely critical for the app's core service.\n*   **Permissions:** Request device permissions (e.g., location, camera, microphone, contacts) only when absolutely necessary for a specific feature the user is actively trying to use, and explain why.\n*   **Analytics:** Use anonymized or aggregated data for analytics whenever possible, rather than tracking individual user behavior.\n*   **Data Retention:** Establish clear data retention policies. Delete user data when it's no longer needed for the purpose it was collected, or when a user requests account deletion.\n*   **Feature Design:** Before adding a new feature, critically evaluate if it truly requires collecting new types of personal data. If it can be achieved without it, choose that path.\n\nBy embracing data minimization, app developers proactively reduce the risk associated with handling personal data, making their apps inherently more secure and privacy-friendly.",
+      "judge_score": 1.0,
+      "judge_reason": "The candidate output perfectly addresses the prompt's request to 'Explain one best practice for protecting personal user data in an app' by focusing on 'Data Minimization.' This practice is explicitly listed as 'Minimize data collection' in the expected answer. The explanation provided is comprehensive, accurate, and highly relevant, making it a fully correct and compliant response. The prompt specifically asked for 'one' best practice, which the candidate delivered excellently, even though the expected answer listed multiple.",
+      "judge_compliant": true,
+      "is_sensitive": true
+    }
+  ]
+}

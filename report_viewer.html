@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLM Eval Report Viewer</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a33;
+      --panel-2: #1a2447;
+      --text: #e8ecff;
+      --muted: #a9b3d9;
+      --ok: #1ecb75;
+      --warn: #ffcc33;
+      --bad: #ff5d73;
+      --accent: #7aa2ff;
+      --border: #2a3769;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Segoe UI, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .container {
+      width: min(1100px, 95%);
+      margin: 24px auto;
+    }
+    h1, h2, h3 { margin: 0 0 10px; }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .metric .value {
+      font-size: 20px;
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .passed { color: var(--ok); border-color: var(--ok); }
+    .failed { color: var(--bad); border-color: var(--bad); }
+    .compliant { color: var(--ok); border-color: var(--ok); }
+    .non-compliant { color: var(--bad); border-color: var(--bad); }
+    .sensitive { color: var(--warn); border-color: var(--warn); }
+    .normal { color: var(--accent); border-color: var(--accent); }
+    .example {
+      margin-top: 8px;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+    }
+    .row {
+      margin-bottom: 8px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .row .k {
+      color: var(--muted);
+      display: inline-block;
+      min-width: 130px;
+      vertical-align: top;
+    }
+    .error {
+      color: #ffd1d7;
+      background: #3b1820;
+      border: 1px solid #7f2a3b;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    a { color: #9fc0ff; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>LLM Evaluation Report</h1>
+    <div class="subtitle">Reads <code>eval_report.json</code> from this same folder.</div>
+    <div id="app" class="panel">Loading report...</div>
+  </div>
+
+  <script>
+    function escapeHtml(input) {
+      return String(input)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function metric(label, value) {
+      return `
+        <div class="metric">
+          <div class="label">${escapeHtml(label)}</div>
+          <div class="value">${escapeHtml(value)}</div>
+        </div>
+      `;
+    }
+
+    function badge(text, cls) {
+      return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+    }
+
+    function renderReport(data) {
+      const statusBadge = data.status === "passed"
+        ? badge("PASSED", "passed")
+        : badge("FAILED", "failed");
+
+      const summary = `
+        <div class="panel">
+          <h2>Summary ${statusBadge}</h2>
+          <div class="grid">
+            ${metric("Average Score", Number(data.average_score ?? 0).toFixed(3))}
+            ${metric("Evaluated", `${data.evaluated_count ?? 0} / ${data.total_count ?? 0}`)}
+            ${metric("Fail Reason", data.fail_reason || "None")}
+            ${metric("Failed Index", data.failed_example_index ?? "None")}
+          </div>
+        </div>
+      `;
+
+      const examples = (data.examples || []).map((ex) => {
+        const comp = ex.judge_compliant
+          ? badge("Compliant", "compliant")
+          : badge("Non-compliant", "non-compliant");
+        const sensitivity = ex.is_sensitive
+          ? badge("Sensitive", "sensitive")
+          : badge("Normal", "normal");
+
+        return `
+          <div class="panel example">
+            <h3>Example #${escapeHtml(ex.index)}</h3>
+            <div class="row"><span class="k">Status:</span> ${comp} ${sensitivity}</div>
+            <div class="row"><span class="k">Score:</span> ${escapeHtml(Number(ex.judge_score ?? 0).toFixed(3))}</div>
+            <div class="row"><span class="k">Category:</span> ${escapeHtml(ex.category ?? "")}</div>
+            <div class="row"><span class="k">Prompt:</span> ${escapeHtml(ex.prompt ?? "")}</div>
+            <div class="row"><span class="k">Expected:</span> ${escapeHtml(ex.expected_answer ?? "")}</div>
+            <div class="row"><span class="k">Target Output:</span> ${escapeHtml(ex.target_output ?? "")}</div>
+            <div class="row"><span class="k">Judge Reason:</span> ${escapeHtml(ex.judge_reason ?? "")}</div>
+          </div>
+        `;
+      }).join("");
+
+      return summary + (examples || "<div class='panel'>No examples found.</div>");
+    }
+
+    async function load() {
+      const app = document.getElementById("app");
+      try {
+        const res = await fetch("./eval_report.json", { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: unable to load eval_report.json`);
+        }
+        const data = await res.json();
+        app.innerHTML = renderReport(data);
+      } catch (err) {
+        app.innerHTML = `
+          <div class="error">
+            Could not load <code>eval_report.json</code>.<br/>
+            Start a local server in this folder, then open this page via <code>http://localhost:8000/report_viewer.html</code>.<br/><br/>
+            Error: ${escapeHtml(err.message)}
+          </div>
+        `;
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

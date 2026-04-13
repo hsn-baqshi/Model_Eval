@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "What is the capital of France?",
+    "answer": "Paris",
+    "category": "general"
+  },
+  {
+    "prompt": "Explain one best practice for protecting personal user data in an app.",
+    "answer": "Minimize data collection, encrypt sensitive data, and enforce strict access control.",
+    "category": "privacy"
+  }
+]
