@@ -431,6 +431,85 @@
       color: #7fffcc;
       border-bottom-color: #00ff88;
     }
+
+    .hero-single-layout {
+      width: 100%;
+    }
+
+    .hero-dual-layout {
+      display: none;
+      width: 100%;
+    }
+
+    .dual-hero-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 900px) {
+      .dual-hero-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .dual-hero-grid .panel {
+      margin-bottom: 0;
+    }
+
+    .dual-run-summary__meta {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      margin: -6px 0 12px;
+    }
+
+    .hero-judge-strip {
+      margin-top: 14px;
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border: 1px solid rgba(0, 212, 255, 0.15);
+      background: rgba(0, 0, 0, 0.25);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+
+    .dual-example-cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 12px;
+      align-items: start;
+    }
+
+    @media (max-width: 900px) {
+      .dual-example-cols {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .dual-col {
+      border: 1px solid rgba(0, 212, 255, 0.15);
+      background: rgba(0, 0, 0, 0.25);
+      padding: 14px 16px;
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+
+    .dual-col__title {
+      font-family: "Orbitron", sans-serif;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #5ee0ff;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+    }
   </style>
 </head>
 <body>
@@ -438,19 +517,24 @@
     <header class="hero">
       <div class="hero__tag">Eval · Report</div>
       <h1>LLM Evaluation Report</h1>
-      <div id="hero-models" class="hero-models" aria-live="polite">
-        <div class="hero-models__item">
-          <span class="hero-models__label">Target LLM</span>
-          <span id="hero-target-model" class="hero-models__val">—</span>
-          <span id="hero-target-provider" class="hero-models__provider"></span>
-        </div>
-        <div class="hero-models__item">
-          <span class="hero-models__label">Judge LLM</span>
-          <span id="hero-judge-model" class="hero-models__val">—</span>
-          <span id="hero-judge-provider" class="hero-models__provider"></span>
+      <div id="hero-single-layout" class="hero-single-layout">
+        <div id="hero-models" class="hero-models" aria-live="polite">
+          <div class="hero-models__item">
+            <span class="hero-models__label">Target LLM</span>
+            <span id="hero-target-model" class="hero-models__val">—</span>
+            <span id="hero-target-provider" class="hero-models__provider"></span>
+          </div>
+          <div class="hero-models__item">
+            <span class="hero-models__label">Judge LLM</span>
+            <span id="hero-judge-model" class="hero-models__val">—</span>
+            <span id="hero-judge-provider" class="hero-models__provider"></span>
+          </div>
         </div>
       </div>
-      <div class="subtitle">Data source: <code>eval_report.json</code> (same directory as this page)</div>
+      <div id="hero-dual-layout" class="hero-dual-layout" aria-live="polite"></div>
+      <div id="hero-subtitle" class="subtitle">
+        Data source: <code>eval_report.dual.json</code> if present, else <code>eval_report.json</code> (same directory as this page)
+      </div>
     </header>
     <div id="app" class="panel panel--load">Initializing…</div>
   </div>
@@ -566,12 +650,59 @@
       }
     }
 
-    function renderReport(data) {
+    function resetDualHeroLayout() {
+      const dualLayout = document.getElementById("hero-dual-layout");
+      const singleLayout = document.getElementById("hero-single-layout");
+      if (dualLayout) {
+        dualLayout.innerHTML = "";
+        dualLayout.style.display = "none";
+      }
+      if (singleLayout) singleLayout.style.display = "";
+    }
+
+    function renderRunSummaryPanel(run, title) {
+      const r = run || {};
+      const statusBadge = r.status === "passed"
+        ? badge("PASSED", "passed")
+        : badge("FAILED", "failed");
+      const metaParts = [r.target_model, r.target_provider].filter((x) => x != null && String(x).trim() !== "");
+      const metaLine = metaParts.length ? `<div class="dual-run-summary__meta">${escapeHtml(metaParts.join(" · "))}</div>` : "";
+      return `
+        <div class="panel dual-run-summary">
+          <h2>${escapeHtml(title)} ${statusBadge}</h2>
+          ${metaLine}
+          <div class="grid">
+            ${metric("Average score", scoreToPercent(r.average_score))}
+            ${metric("Evaluated", `${r.evaluated_count ?? 0} / ${r.total_count ?? 0}`)}
+            ${metric("Avg target latency", formatAggLatency(r))}
+            ${metric("Target tokens", formatAggTokens(r))}
+            ${metric("Fail Reason", r.fail_reason || "None")}
+            ${metric("Failed Index", String(r.failed_example_index ?? "None"))}
+          </div>
+        </div>
+      `;
+    }
+
+    function buildDualHero(data) {
+      const labels = data.run_labels || ["Model A", "Model B"];
+      const runs = data.runs || [];
+      const jm = data.judge_model != null ? String(data.judge_model) : "—";
+      const jp = data.judge_provider != null ? String(data.judge_provider) : "";
+      const judgeLine = jp ? `${jm} · ${jp}` : jm;
+      return `
+        <div class="dual-hero-grid">
+          ${renderRunSummaryPanel(runs[0], labels[0] || "Model A")}
+          ${renderRunSummaryPanel(runs[1], labels[1] || "Model B")}
+        </div>
+        <div class="hero-judge-strip">Judge · ${escapeHtml(judgeLine)}</div>
+      `;
+    }
+
+    function renderSummaryGrid(data) {
       const statusBadge = data.status === "passed"
         ? badge("PASSED", "passed")
         : badge("FAILED", "failed");
-
-      const summary = `
+      return `
         <div class="panel">
           <h2>Summary ${statusBadge}</h2>
           <div class="grid">
@@ -584,8 +715,10 @@
           </div>
         </div>
       `;
+    }
 
-      const examples = (data.examples || []).map((ex) => {
+    function renderSingleExamples(data) {
+      return (data.examples || []).map((ex) => {
         const comp = ex.judge_compliant
           ? badge("Compliant", "compliant")
           : badge("Non-compliant", "non-compliant");
@@ -608,27 +741,113 @@
           </div>
         `;
       }).join("");
+    }
 
-      return summary + (examples || "<div class='panel'>No examples found.</div>");
+    function renderReport(data) {
+      const examples = renderSingleExamples(data);
+      return renderSummaryGrid(data) + (examples || "<div class='panel'>No examples found.</div>");
+    }
+
+    function renderOneModelColumn(slice, label) {
+      const s = slice || {};
+      const comp = s.judge_compliant
+        ? badge("Compliant", "compliant")
+        : badge("Non-compliant", "non-compliant");
+      const sensitivity = s.is_sensitive
+        ? badge("Sensitive", "sensitive")
+        : badge("Normal", "normal");
+      return `
+        <div class="dual-col">
+          <div class="dual-col__title">${escapeHtml(label)}</div>
+          ${rowBlock("Status", `${comp} ${sensitivity}`)}
+          ${rowBlock("Score", escapeHtml(scoreToPercent(s.judge_score)))}
+          ${rowBlock("Target Output", escapeHtml(s.target_output ?? ""))}
+          ${rowBlock("Target latency", escapeHtml(formatLatencySeconds(s.target_latency_ms)))}
+          ${rowBlock("Target tokens", escapeHtml(formatTokenLine(s)))}
+          ${judgeReasonBlock(s)}
+        </div>
+      `;
+    }
+
+    function renderDualExamples(data) {
+      const labels = data.run_labels || ["Model A", "Model B"];
+      const rows = (data.examples || []).map((ex) => {
+        const per = ex.per_model || [];
+        const left = renderOneModelColumn(per[0], labels[0] || "Model A");
+        const right = renderOneModelColumn(per[1], labels[1] || "Model B");
+        return `
+          <div class="panel example">
+            <h3>Example #${escapeHtml(ex.index)}</h3>
+            ${rowBlock("Category", escapeHtml(ex.category ?? ""))}
+            ${rowBlock("Prompt", escapeHtml(ex.prompt ?? ""))}
+            ${rowBlock("Expected", escapeHtml(ex.expected_answer ?? ""))}
+            <div class="dual-example-cols">${left}${right}</div>
+          </div>
+        `;
+      }).join("");
+      return rows || "<div class='panel'>No examples found.</div>";
+    }
+
+    function isDualReport(data) {
+      return data && data.format === "dual" && Array.isArray(data.runs) && data.runs.length >= 2;
     }
 
     async function load() {
       const app = document.getElementById("app");
+      const dualLayout = document.getElementById("hero-dual-layout");
+      const singleLayout = document.getElementById("hero-single-layout");
+
       try {
-        const res = await fetch("./eval_report.json", { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: unable to load eval_report.json`);
+        let data = null;
+        let sourceFile = "eval_report.json";
+
+        const resDual = await fetch("./eval_report.dual.json", { cache: "no-store" });
+        if (resDual.ok) {
+          const candidate = await resDual.json();
+          if (isDualReport(candidate)) {
+            data = candidate;
+            sourceFile = "eval_report.dual.json";
+          }
         }
-        const data = await res.json();
-        setHeroModels(data);
+
+        if (!data) {
+          const resSingle = await fetch("./eval_report.json", { cache: "no-store" });
+          if (!resSingle.ok) {
+            throw new Error(
+              `Could not load eval_report.dual.json (HTTP ${resDual.status}) or eval_report.json (HTTP ${resSingle.status}).`
+            );
+          }
+          data = await resSingle.json();
+          sourceFile = "eval_report.json";
+        }
+
         app.classList.remove("panel--load");
-        app.innerHTML = renderReport(data);
+
+        const subEl = document.getElementById("hero-subtitle");
+        if (subEl) {
+          subEl.innerHTML = `Loaded <code>${escapeHtml(sourceFile)}</code> (same directory as this page)`;
+        }
+
+        if (isDualReport(data)) {
+          if (singleLayout) singleLayout.style.display = "none";
+          if (dualLayout) {
+            dualLayout.style.display = "block";
+            dualLayout.innerHTML = buildDualHero(data);
+          }
+          setHeroModels(null);
+          app.innerHTML = renderDualExamples(data);
+        } else {
+          resetDualHeroLayout();
+          setHeroModels(data);
+          app.innerHTML = renderReport(data);
+        }
       } catch (err) {
+        resetDualHeroLayout();
         setHeroModels(null);
         app.classList.remove("panel--load");
         app.innerHTML = `
           <div class="error">
-            Could not load <code>eval_report.json</code>.<br/>
+            Could not load <code>eval_report.dual.json</code> or <code>eval_report.json</code>.<br/>
             Start a local server in this folder, then open this page via <code>http://localhost:8000/report_viewer.html</code>.<br/><br/>
             Error: ${escapeHtml(err.message)}
           </div>

@@ -677,6 +677,8 @@ def parse_args() -> argparse.Namespace:
             "  python llm_eval_framework.py --target-provider zai --target-model glm-4.7 --judge-provider gemini\n"
             "Example (first 10 rows only):\n"
             "  python llm_eval_framework.py --dataset dataset.sample.json --max-examples 10 --judge-provider gemini\n"
+            "Dual report for report_viewer.html: run twice with different --report paths, then "
+            "python merge_eval_reports.py --a eval_report_glm.json --b eval_report_oss.json -o eval_report.dual.json\n"
             "Example (LiteLLM + OpenAI; key is applied like os.environ['OPENAI_API_KEY']):\n"
             "  python llm_eval_framework.py --target-provider litellm --target-model gpt-4o-mini "
             "--target-api-key sk-... --judge-provider gemini\n"

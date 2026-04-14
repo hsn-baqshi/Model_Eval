@@ -9,7 +9,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 7720.12,
+    "target_latency_ms": 7732.24,
     "target_prompt_tokens": 75,
     "target_completion_tokens": 1703,
     "target_total_tokens": 1778
@@ -24,7 +24,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 7006.38,
+    "target_latency_ms": 7002.96,
     "target_prompt_tokens": 79,
     "target_completion_tokens": 1711,
     "target_total_tokens": 1790
@@ -39,7 +39,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 1046.17,
+    "target_latency_ms": 1043.94,
     "target_prompt_tokens": 73,
     "target_completion_tokens": 238,
     "target_total_tokens": 311
@@ -54,7 +54,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 2363.75,
+    "target_latency_ms": 2372.0,
     "target_prompt_tokens": 77,
     "target_completion_tokens": 567,
     "target_total_tokens": 644
@@ -69,7 +69,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 9583.72,
+    "target_latency_ms": 9597.01,
     "target_prompt_tokens": 74,
     "target_completion_tokens": 2349,
     "target_total_tokens": 2423
@@ -84,7 +84,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 4143.17,
+    "target_latency_ms": 4144.71,
     "target_prompt_tokens": 77,
     "target_completion_tokens": 1004,
     "target_total_tokens": 1081
@@ -99,7 +99,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 332.08,
+    "target_latency_ms": 337.21,
     "target_prompt_tokens": 80,
     "target_completion_tokens": 60,
     "target_total_tokens": 140
@@ -114,7 +114,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 267.51,
+    "target_latency_ms": 257.99,
     "target_prompt_tokens": 80,
     "target_completion_tokens": 43,
     "target_total_tokens": 123
@@ -129,7 +129,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 404.93,
+    "target_latency_ms": 401.55,
     "target_prompt_tokens": 77,
     "target_completion_tokens": 77,
     "target_total_tokens": 154
@@ -144,7 +144,7 @@
     "judge_reason": null,
     "judge_compliant": null,
     "is_sensitive": null,
-    "target_latency_ms": 867.55,
+    "target_latency_ms": 847.38,
     "target_prompt_tokens": 82,
     "target_completion_tokens": 190,
     "target_total_tokens": 272
