@@ -510,6 +510,58 @@
       padding-bottom: 8px;
       border-bottom: 1px solid rgba(0, 212, 255, 0.12);
     }
+
+    .model-failed-tag {
+      margin-left: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #ff6b6b;
+      text-shadow: 0 0 14px rgba(255, 80, 80, 0.5);
+    }
+
+    .hero-models__val-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 6px 10px;
+    }
+
+    .jump-fail-btn {
+      margin-top: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #ffd0d0;
+      background: rgba(80, 20, 30, 0.55);
+      border: 1px solid rgba(255, 100, 100, 0.45);
+      padding: 8px 14px;
+      cursor: pointer;
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      box-shadow: 0 0 16px rgba(255, 60, 60, 0.15);
+    }
+
+    .jump-fail-btn:hover {
+      color: #fff;
+      border-color: rgba(255, 140, 140, 0.75);
+      background: rgba(100, 30, 40, 0.65);
+    }
+
+    .panel.example {
+      scroll-margin-top: 28px;
+    }
+
+    .panel.example.example--jump-highlight {
+      outline: 2px solid rgba(255, 100, 100, 0.65);
+      outline-offset: 2px;
+      transition: outline-color 0.2s ease;
+    }
   </style>
 </head>
 <body>
@@ -521,7 +573,10 @@
         <div id="hero-models" class="hero-models" aria-live="polite">
           <div class="hero-models__item">
             <span class="hero-models__label">Target LLM</span>
-            <span id="hero-target-model" class="hero-models__val">—</span>
+            <div class="hero-models__val-wrap">
+              <span id="hero-target-model" class="hero-models__val">—</span>
+              <span id="hero-target-failed" class="model-failed-tag" hidden>failed</span>
+            </div>
             <span id="hero-target-provider" class="hero-models__provider"></span>
           </div>
           <div class="hero-models__item">
@@ -628,6 +683,7 @@
       const judgeEl = document.getElementById("hero-judge-model");
       const tpEl = document.getElementById("hero-target-provider");
       const jpEl = document.getElementById("hero-judge-provider");
+      const failSpan = document.getElementById("hero-target-failed");
       if (!targetEl || !judgeEl) return;
 
       const tm = data && data.target_model != null && String(data.target_model).trim() !== ""
@@ -639,6 +695,11 @@
 
       targetEl.textContent = tm;
       judgeEl.textContent = jm;
+
+      if (failSpan) {
+        const showFailed = Boolean(data && data.status && String(data.status).toLowerCase() !== "passed");
+        failSpan.hidden = !showFailed;
+      }
 
       if (tpEl) {
         const p = data && data.target_provider ? String(data.target_provider) : "";
@@ -660,13 +721,26 @@
       if (singleLayout) singleLayout.style.display = "";
     }
 
+    function jumpFailButtonHtml(failedExampleIndex) {
+      if (failedExampleIndex == null || failedExampleIndex === "") return "";
+      const n = Number(failedExampleIndex);
+      if (Number.isNaN(n)) return "";
+      const id = `example-${n}`;
+      return `<button type="button" class="jump-fail-btn" data-scroll-to="${escapeHtml(id)}">Go to failed prompt</button>`;
+    }
+
     function renderRunSummaryPanel(run, title) {
       const r = run || {};
-      const statusBadge = r.status === "passed"
+      const passed = String(r.status || "").toLowerCase() === "passed";
+      const statusBadge = passed
         ? badge("PASSED", "passed")
         : badge("FAILED", "failed");
       const metaParts = [r.target_model, r.target_provider].filter((x) => x != null && String(x).trim() !== "");
-      const metaLine = metaParts.length ? `<div class="dual-run-summary__meta">${escapeHtml(metaParts.join(" · "))}</div>` : "";
+      const failedTag = !passed ? `<span class="model-failed-tag">failed</span>` : "";
+      const metaLine = metaParts.length
+        ? `<div class="dual-run-summary__meta">${escapeHtml(metaParts.join(" · "))}${failedTag}</div>`
+        : (!passed ? `<div class="dual-run-summary__meta">${failedTag}</div>` : "");
+      const jumpBtn = !passed ? jumpFailButtonHtml(r.failed_example_index) : "";
       return `
         <div class="panel dual-run-summary">
           <h2>${escapeHtml(title)} ${statusBadge}</h2>
@@ -679,6 +753,7 @@
             ${metric("Fail Reason", r.fail_reason || "None")}
             ${metric("Failed Index", String(r.failed_example_index ?? "None"))}
           </div>
+          ${jumpBtn}
         </div>
       `;
     }
@@ -699,9 +774,11 @@
     }
 
     function renderSummaryGrid(data) {
-      const statusBadge = data.status === "passed"
+      const passed = String(data.status || "").toLowerCase() === "passed";
+      const statusBadge = passed
         ? badge("PASSED", "passed")
         : badge("FAILED", "failed");
+      const jumpBtn = !passed ? jumpFailButtonHtml(data.failed_example_index) : "";
       return `
         <div class="panel">
           <h2>Summary ${statusBadge}</h2>
@@ -713,6 +790,7 @@
             ${metric("Fail Reason", data.fail_reason || "None")}
             ${metric("Failed Index", String(data.failed_example_index ?? "None"))}
           </div>
+          ${jumpBtn}
         </div>
       `;
     }
@@ -727,7 +805,7 @@
           : badge("Normal", "normal");
 
         return `
-          <div class="panel example">
+          <div id="example-${escapeHtml(String(ex.index))}" class="panel example">
             <h3>Example #${escapeHtml(ex.index)}</h3>
             ${rowBlock("Status", `${comp} ${sensitivity}`)}
             ${rowBlock("Score", escapeHtml(scoreToPercent(ex.judge_score)))}
@@ -776,7 +854,7 @@
         const left = renderOneModelColumn(per[0], labels[0] || "Model A");
         const right = renderOneModelColumn(per[1], labels[1] || "Model B");
         return `
-          <div class="panel example">
+          <div id="example-${escapeHtml(String(ex.index))}" class="panel example">
             <h3>Example #${escapeHtml(ex.index)}</h3>
             ${rowBlock("Category", escapeHtml(ex.category ?? ""))}
             ${rowBlock("Prompt", escapeHtml(ex.prompt ?? ""))}
@@ -790,6 +868,27 @@
 
     function isDualReport(data) {
       return data && data.format === "dual" && Array.isArray(data.runs) && data.runs.length >= 2;
+    }
+
+    function wireJumpFailButtonsOnce() {
+      if (wireJumpFailButtonsOnce._done) return;
+      wireJumpFailButtonsOnce._done = true;
+      document.body.addEventListener("click", (ev) => {
+        const btn = ev.target.closest(".jump-fail-btn");
+        if (!btn) return;
+        const id = btn.getAttribute("data-scroll-to");
+        if (!id) return;
+        const el = document.getElementById(id);
+        if (!el) return;
+        document.querySelectorAll(".example--jump-highlight").forEach((n) => {
+          n.classList.remove("example--jump-highlight");
+        });
+        el.classList.add("example--jump-highlight");
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        window.setTimeout(() => {
+          el.classList.remove("example--jump-highlight");
+        }, 2600);
+      });
     }
 
     async function load() {
@@ -855,6 +954,7 @@
       }
     }
 
+    wireJumpFailButtonsOnce();
     load();
   </script>
 </body>

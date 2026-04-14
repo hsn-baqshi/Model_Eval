@@ -18,6 +18,8 @@ from openai import (
     RateLimitError,
 )
 
+from merge_eval_reports import merge_reports
+
 
 SENSITIVE_KEYWORDS = {
     "security",
@@ -431,6 +433,29 @@ def call_chat_model(
     return text
 
 
+def build_single_eval_report(
+    records: List[EvalRecord],
+    judge_summary: Dict[str, Any],
+    *,
+    target_model: str,
+    target_provider: str,
+    judge_model: str,
+    judge_provider: str,
+    max_examples_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Assemble one eval_report-shaped dict (same schema as the historical single-run file)."""
+    report = dict(judge_summary)
+    report["examples"] = [r.to_dict() for r in records]
+    report["target_model"] = target_model
+    report["judge_model"] = judge_model
+    report["target_provider"] = target_provider
+    report["judge_provider"] = judge_provider
+    if max_examples_meta:
+        report.update(max_examples_meta)
+    report.update(aggregate_target_run_metrics(records))
+    return report
+
+
 def aggregate_target_run_metrics(records: List[EvalRecord]) -> Dict[str, Any]:
     latencies = [r.target_latency_ms for r in records if r.target_latency_ms is not None]
     totals = [r.target_total_tokens for r in records if r.target_total_tokens is not None]
@@ -617,6 +642,34 @@ def create_client(api_key: str, base_url: Optional[str]) -> OpenAI:
     return OpenAI(**kwargs)
 
 
+def _key_resolution_namespace(
+    *,
+    target_provider: str,
+    target_model: str,
+    target_base_url: Optional[str],
+    target_api_key: Optional[str],
+) -> argparse.Namespace:
+    """Minimal namespace for :func:`resolve_target_api_key` (e.g. second target)."""
+    ns = argparse.Namespace()
+    ns.target_provider = target_provider
+    ns.target_model = target_model
+    ns.target_base_url = target_base_url
+    ns.target_api_key = target_api_key
+    return ns
+
+
+def effective_target_base_url(provider: str, user_url: Optional[str]) -> Optional[str]:
+    """Default OpenAI-compatible base URLs when ``--target-base-url`` is omitted."""
+    u = (user_url or "").strip() or None
+    if provider == "gemini" and not u:
+        return "https://generativelanguage.googleapis.com/v1beta/openai/"
+    if provider == "deepseek" and not u:
+        return "https://api.deepseek.com"
+    if provider == "zai" and not u:
+        return "https://api.z.ai/api/paas/v4/"
+    return u
+
+
 def resolve_target_api_key(args: argparse.Namespace) -> Optional[str]:
     """CLI ``--target-api-key`` wins; otherwise env vars depend on ``--target-provider``."""
     if getattr(args, "target_api_key", None):
@@ -677,7 +730,8 @@ def parse_args() -> argparse.Namespace:
             "  python llm_eval_framework.py --target-provider zai --target-model glm-4.7 --judge-provider gemini\n"
             "Example (first 10 rows only):\n"
             "  python llm_eval_framework.py --dataset dataset.sample.json --max-examples 10 --judge-provider gemini\n"
-            "Dual report for report_viewer.html: run twice with different --report paths, then "
+            "Dual report in one run: add --target-model-b ... --report eval_report.dual.json (and optional "
+            "--target-provider-b, --outputs-b). Or merge two JSON files: "
             "python merge_eval_reports.py --a eval_report_glm.json --b eval_report_oss.json -o eval_report.dual.json\n"
             "Example (LiteLLM + OpenAI; key is applied like os.environ['OPENAI_API_KEY']):\n"
             "  python llm_eval_framework.py --target-provider litellm --target-model gpt-4o-mini "
@@ -765,6 +819,44 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Run only the first N examples after loading the dataset (default: all rows).",
     )
+    parser.add_argument(
+        "--target-model-b",
+        default=os.getenv("TARGET_MODEL_B"),
+        help="Second target model. When set, both targets run on the same dataset; --report should usually be "
+        "eval_report.dual.json. Provider/key/base URL default to target A unless *_b flags are set.",
+    )
+    parser.add_argument(
+        "--target-provider-b",
+        choices=["openai", "gemini", "deepseek", "litellm", "zai"],
+        default=None,
+        help="Provider for second target (default: same as --target-provider). "
+        "Override with env TARGET_PROVIDER_B by passing the flag explicitly.",
+    )
+    parser.add_argument(
+        "--target-api-key-b",
+        default=None,
+        help="API key for second target (default: env resolution for model B, else same key as target A).",
+    )
+    parser.add_argument(
+        "--target-base-url-b",
+        default=None,
+        help="Base URL for second target (default: --target-base-url).",
+    )
+    parser.add_argument(
+        "--outputs-b",
+        default=os.getenv("EVAL_OUTPUTS_B", "model_b_outputs.json"),
+        help="Per-example outputs JSON for target B when --target-model-b is set (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--run-label-a",
+        default=None,
+        help="Viewer label for first target in dual report (default: target A model id).",
+    )
+    parser.add_argument(
+        "--run-label-b",
+        default=None,
+        help="Viewer label for second target in dual report (default: target B model id).",
+    )
     return parser.parse_args()
 
 
@@ -798,61 +890,105 @@ def main() -> None:
             raise ValueError("--max-examples must be >= 1.")
         dataset = dataset[: args.max_examples]
 
-    target_client: Optional[OpenAI] = None
-    target_base_url = args.target_base_url
-    if args.target_provider != "litellm":
-        if args.target_provider == "gemini" and not target_base_url:
-            # Gemini supports the OpenAI-compatible API at this base URL.
-            target_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        if args.target_provider == "deepseek" and not target_base_url:
-            # DeepSeek supports an OpenAI-compatible API at this base URL.
-            target_base_url = "https://api.deepseek.com"
-        if args.target_provider == "zai" and not target_base_url:
-            # Z.AI OpenAI-compatible API (see https://docs.z.ai/guides/develop/openai/python).
-            target_base_url = "https://api.z.ai/api/paas/v4/"
-        target_client = create_client(target_api_key, target_base_url)
+    max_examples_meta: Optional[Dict[str, Any]] = None
+    if args.max_examples is not None:
+        max_examples_meta = {
+            "max_examples": args.max_examples,
+            "dataset_rows_in_file": dataset_full_count,
+            "dataset_rows_evaluated": len(dataset),
+        }
 
     judge_base_url = args.judge_base_url
     if args.judge_provider == "gemini" and not judge_base_url:
-        # Gemini supports the OpenAI-compatible API at this base URL.
         judge_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
     if args.judge_provider == "deepseek" and not judge_base_url:
-        # DeepSeek supports an OpenAI-compatible API at this base URL.
         judge_base_url = "https://api.deepseek.com"
 
     judge_client = create_client(args.judge_api_key, judge_base_url)
 
-    records = generate_target_outputs(
-        dataset=dataset,
-        target_provider=args.target_provider,
-        target_client=target_client,
-        target_model=args.target_model,
-        target_system_prompt=args.target_system_prompt,
-        target_api_key=target_api_key,
-        target_base_url=args.target_base_url if args.target_provider == "litellm" else None,
+    model_b = (args.target_model_b or "").strip()
+    dual_mode = bool(model_b)
+    if dual_mode and (args.target_model or "").strip() == model_b:
+        raise ValueError("--target-model and --target-model-b must differ for a dual run.")
+
+    def run_target_pipeline(
+        provider: str,
+        model: str,
+        api_key: str,
+        litellm_base: Optional[str],
+        openai_compat_base: Optional[str],
+    ) -> Tuple[List[EvalRecord], Dict[str, Any]]:
+        client: Optional[OpenAI] = None
+        if provider != "litellm":
+            resolved = effective_target_base_url(provider, openai_compat_base)
+            client = create_client(api_key, resolved)
+        lb = (litellm_base or "").strip() or None if provider == "litellm" else None
+        recs = generate_target_outputs(
+            dataset=dataset,
+            target_provider=provider,
+            target_client=client,
+            target_model=model,
+            target_system_prompt=args.target_system_prompt,
+            target_api_key=api_key,
+            target_base_url=lb,
+        )
+        judge_summary = evaluate_outputs(
+            records=recs,
+            judge_client=judge_client,
+            judge_model=args.judge_model,
+        )
+        rep = build_single_eval_report(
+            recs,
+            judge_summary,
+            target_model=model,
+            target_provider=provider,
+            judge_model=args.judge_model,
+            judge_provider=args.judge_provider,
+            max_examples_meta=max_examples_meta,
+        )
+        return recs, rep
+
+    litellm_base_a = (args.target_base_url or "").strip() or None
+    records_a, report_a = run_target_pipeline(
+        args.target_provider,
+        args.target_model,
+        target_api_key,
+        litellm_base_a,
+        args.target_base_url,
     )
 
-    save_json(outputs_path, [r.to_dict() for r in records])
+    save_json(outputs_path, [r.to_dict() for r in records_a])
 
-    report = evaluate_outputs(
-        records=records,
-        judge_client=judge_client,
-        judge_model=args.judge_model,
-    )
-    report["examples"] = [r.to_dict() for r in records]
-    report["target_model"] = args.target_model
-    report["judge_model"] = args.judge_model
-    report["target_provider"] = args.target_provider
-    report["judge_provider"] = args.judge_provider
-    if args.max_examples is not None:
-        report["max_examples"] = args.max_examples
-        report["dataset_rows_in_file"] = dataset_full_count
-        report["dataset_rows_evaluated"] = len(records)
-    report.update(aggregate_target_run_metrics(records))
+    if dual_mode:
+        prov_b = args.target_provider_b or args.target_provider
+        base_b_litellm = (args.target_base_url_b or args.target_base_url or "").strip() or None
+        base_b_openai = args.target_base_url_b or args.target_base_url
+        ns_b = _key_resolution_namespace(
+            target_provider=prov_b,
+            target_model=model_b,
+            target_base_url=args.target_base_url_b or args.target_base_url,
+            target_api_key=args.target_api_key_b,
+        )
+        key_b = resolve_target_api_key(ns_b) or target_api_key
+        if not key_b:
+            raise ValueError(
+                "Missing API key for second target. Set --target-api-key-b or env vars for model B "
+                "(same rules as target A), or rely on the same key as target A."
+            )
+        records_b, report_b = run_target_pipeline(prov_b, model_b, key_b, base_b_litellm, base_b_openai)
+        save_json(Path(args.outputs_b), [r.to_dict() for r in records_b])
 
-    save_json(report_path, report)
-
-    print(json.dumps(report, indent=2))
+        dual_payload = merge_reports(
+            report_a,
+            report_b,
+            (args.run_label_a or "").strip() or None,
+            (args.run_label_b or "").strip() or None,
+        )
+        save_json(report_path, dual_payload)
+        print(json.dumps(dual_payload, indent=2))
+    else:
+        save_json(report_path, report_a)
+        print(json.dumps(report_a, indent=2))
 
 
 if __name__ == "__main__":
