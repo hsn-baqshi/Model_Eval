@@ -100,6 +100,50 @@
       border-radius: 1px;
     }
 
+    .hero-models {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px 28px;
+      margin: 14px 0 16px;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(0, 212, 255, 0.2);
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+    }
+
+    .hero-models__item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: min(280px, 100%);
+    }
+
+    .hero-models__label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .hero-models__val {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 12px rgba(0, 212, 255, 0.25));
+    }
+
+    .hero-models__provider {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
     h1 {
       margin: 0 0 8px;
       font-family: "Orbitron", sans-serif;
@@ -304,6 +348,63 @@
       color: #d4eef5;
     }
 
+    .judge-details {
+      margin-top: 4px;
+      border: 1px solid rgba(0, 212, 255, 0.22);
+      background: rgba(0, 0, 0, 0.35);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+
+    .judge-details__summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #8ab4c4;
+      user-select: none;
+    }
+
+    .judge-details__summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .judge-details__chev {
+      display: inline-block;
+      font-size: 9px;
+      color: #00e5a8;
+      transition: transform 0.15s ease;
+    }
+
+    .judge-details[open] .judge-details__chev {
+      transform: rotate(90deg);
+    }
+
+    .judge-details__summary:hover {
+      color: #c8e8f0;
+      background: rgba(0, 212, 255, 0.06);
+    }
+
+    .judge-details__body {
+      padding: 0 14px 14px 32px;
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 0.02em;
+      text-transform: none;
+      color: #d4eef5;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border-top: 1px solid rgba(0, 212, 255, 0.12);
+      margin-top: 0;
+      padding-top: 12px;
+    }
+
     .error {
       color: #c8e0ff;
       background: rgba(0, 40, 60, 0.35);
@@ -337,6 +438,18 @@
     <header class="hero">
       <div class="hero__tag">Eval · Report</div>
       <h1>LLM Evaluation Report</h1>
+      <div id="hero-models" class="hero-models" aria-live="polite">
+        <div class="hero-models__item">
+          <span class="hero-models__label">Target LLM</span>
+          <span id="hero-target-model" class="hero-models__val">—</span>
+          <span id="hero-target-provider" class="hero-models__provider"></span>
+        </div>
+        <div class="hero-models__item">
+          <span class="hero-models__label">Judge LLM</span>
+          <span id="hero-judge-model" class="hero-models__val">—</span>
+          <span id="hero-judge-provider" class="hero-models__provider"></span>
+        </div>
+      </div>
       <div class="subtitle">Data source: <code>eval_report.json</code> (same directory as this page)</div>
     </header>
     <div id="app" class="panel panel--load">Initializing…</div>
@@ -369,6 +482,80 @@
       return `<div class="row"><span class="k">${escapeHtml(key)}</span><span class="v">${innerHtml}</span></div>`;
     }
 
+    function formatLatencyMs(value) {
+      if (value == null || value === "") return "—";
+      const n = Number(value);
+      if (Number.isNaN(n)) return "—";
+      return `${n.toFixed(1)} ms`;
+    }
+
+    function formatTokenLine(ex) {
+      if (ex.target_total_tokens != null) {
+        const p = ex.target_prompt_tokens != null ? ex.target_prompt_tokens : "—";
+        const c = ex.target_completion_tokens != null ? ex.target_completion_tokens : "—";
+        return `${ex.target_total_tokens} total · prompt ${p} · completion ${c}`;
+      }
+      return "n/a (API did not return usage)";
+    }
+
+    function judgeReasonBlock(ex) {
+      const reason = ex.judge_reason != null ? String(ex.judge_reason) : "";
+      const body = reason ? escapeHtml(reason) : "<span class=\"v\">—</span>";
+      return `
+        <div class="row judge-reason-row">
+          <span class="k">Judge reason</span>
+          <details class="judge-details">
+            <summary class="judge-details__summary">
+              <span class="judge-details__chev" aria-hidden="true">▶</span>
+              <span>Expand / collapse reasoning</span>
+            </summary>
+            <div class="judge-details__body">${body}</div>
+          </details>
+        </div>
+      `;
+    }
+
+    function formatAggLatency(data) {
+      const v = data.avg_target_latency_ms;
+      if (v == null || v === "") return "—";
+      return `${Number(v).toFixed(1)} ms (mean)`;
+    }
+
+    function formatAggTokens(data) {
+      const sum = data.sum_target_tokens;
+      const avg = data.avg_target_tokens_per_example;
+      if (sum == null) return "—";
+      const avgPart = avg != null ? ` · ${Number(avg).toFixed(1)} / example` : "";
+      return `${sum} total${avgPart}`;
+    }
+
+    function setHeroModels(data) {
+      const targetEl = document.getElementById("hero-target-model");
+      const judgeEl = document.getElementById("hero-judge-model");
+      const tpEl = document.getElementById("hero-target-provider");
+      const jpEl = document.getElementById("hero-judge-provider");
+      if (!targetEl || !judgeEl) return;
+
+      const tm = data && data.target_model != null && String(data.target_model).trim() !== ""
+        ? String(data.target_model)
+        : "—";
+      const jm = data && data.judge_model != null && String(data.judge_model).trim() !== ""
+        ? String(data.judge_model)
+        : "—";
+
+      targetEl.textContent = tm;
+      judgeEl.textContent = jm;
+
+      if (tpEl) {
+        const p = data && data.target_provider ? String(data.target_provider) : "";
+        tpEl.textContent = p ? `Provider · ${p}` : "";
+      }
+      if (jpEl) {
+        const p = data && data.judge_provider ? String(data.judge_provider) : "";
+        jpEl.textContent = p ? `Provider · ${p}` : "";
+      }
+    }
+
     function renderReport(data) {
       const statusBadge = data.status === "passed"
         ? badge("PASSED", "passed")
@@ -380,6 +567,8 @@
           <div class="grid">
             ${metric("Average Score", Number(data.average_score ?? 0).toFixed(3))}
             ${metric("Evaluated", `${data.evaluated_count ?? 0} / ${data.total_count ?? 0}`)}
+            ${metric("Avg target latency", formatAggLatency(data))}
+            ${metric("Target tokens", formatAggTokens(data))}
             ${metric("Fail Reason", data.fail_reason || "None")}
             ${metric("Failed Index", String(data.failed_example_index ?? "None"))}
           </div>
@@ -403,7 +592,9 @@
             ${rowBlock("Prompt", escapeHtml(ex.prompt ?? ""))}
             ${rowBlock("Expected", escapeHtml(ex.expected_answer ?? ""))}
             ${rowBlock("Target Output", escapeHtml(ex.target_output ?? ""))}
-            ${rowBlock("Judge Reason", escapeHtml(ex.judge_reason ?? ""))}
+            ${rowBlock("Target latency", escapeHtml(formatLatencyMs(ex.target_latency_ms)))}
+            ${rowBlock("Target tokens", escapeHtml(formatTokenLine(ex)))}
+            ${judgeReasonBlock(ex)}
           </div>
         `;
       }).join("");
@@ -419,9 +610,11 @@
           throw new Error(`HTTP ${res.status}: unable to load eval_report.json`);
         }
         const data = await res.json();
+        setHeroModels(data);
         app.classList.remove("panel--load");
         app.innerHTML = renderReport(data);
       } catch (err) {
+        setHeroModels(null);
         app.classList.remove("panel--load");
         app.innerHTML = `
           <div class="error">

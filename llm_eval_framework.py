@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openai import APIConnectionError, InternalServerError, NotFoundError, OpenAI, RateLimitError
 
@@ -40,6 +40,10 @@ class EvalRecord:
     judge_reason: Optional[str] = None
     judge_compliant: Optional[bool] = None
     is_sensitive: Optional[bool] = None
+    target_latency_ms: Optional[float] = None
+    target_prompt_tokens: Optional[int] = None
+    target_completion_tokens: Optional[int] = None
+    target_total_tokens: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -52,6 +56,10 @@ class EvalRecord:
             "judge_reason": self.judge_reason,
             "judge_compliant": self.judge_compliant,
             "is_sensitive": self.is_sensitive,
+            "target_latency_ms": self.target_latency_ms,
+            "target_prompt_tokens": self.target_prompt_tokens,
+            "target_completion_tokens": self.target_completion_tokens,
+            "target_total_tokens": self.target_total_tokens,
         }
 
 
@@ -89,13 +97,30 @@ def parse_judge_json(raw_text: str) -> Dict[str, Any]:
     return json.loads(raw_text)
 
 
-def call_chat_model(
+def _parse_usage_tokens(response: Any) -> Dict[str, Optional[int]]:
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+    out: Dict[str, Optional[int]] = {k: None for k in keys}
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return out
+    for k in keys:
+        val = getattr(usage, k, None)
+        if val is not None:
+            try:
+                out[k] = int(val)
+            except (TypeError, ValueError):
+                out[k] = None
+    return out
+
+
+def call_chat_model_with_metrics(
     client: OpenAI,
     model: str,
     prompt: str,
     system_prompt: Optional[str] = None,
     temperature: float = 0.0,
-) -> str:
+) -> Tuple[str, Optional[float], Dict[str, Optional[int]]]:
+    """Returns (assistant_text, latency_ms for successful request, token counts from API if present)."""
     messages: List[Dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -107,12 +132,15 @@ def call_chat_model(
 
     for attempt in range(max_retries + 1):
         try:
+            t0 = time.perf_counter()
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
             )
-            return response.choices[0].message.content or ""
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            text = response.choices[0].message.content or ""
+            return text, latency_ms, _parse_usage_tokens(response)
         except NotFoundError as exc:
             error_text = str(exc)
             if "no longer available to new users" in error_text.lower() or "status': 'NOT_FOUND'" in error_text:
@@ -153,6 +181,31 @@ def call_chat_model(
 
     # Defensive fallback; function should have returned or raised above.
     raise RuntimeError("Failed to get model response after retries.")
+
+
+def call_chat_model(
+    client: OpenAI,
+    model: str,
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+) -> str:
+    text, _, _ = call_chat_model_with_metrics(
+        client, model, prompt, system_prompt=system_prompt, temperature=temperature
+    )
+    return text
+
+
+def aggregate_target_run_metrics(records: List[EvalRecord]) -> Dict[str, Any]:
+    latencies = [r.target_latency_ms for r in records if r.target_latency_ms is not None]
+    totals = [r.target_total_tokens for r in records if r.target_total_tokens is not None]
+    return {
+        "avg_target_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+        "sum_target_tokens": int(sum(totals)) if totals else None,
+        "avg_target_tokens_per_example": round(sum(totals) / len(totals), 2) if totals else None,
+        "examples_with_latency": len(latencies),
+        "examples_with_token_usage": len(totals),
+    }
 
 
 def judge_one_example(
@@ -218,7 +271,7 @@ def generate_target_outputs(
         expected_answer = str(item["answer"])
         category = item.get("category")
 
-        target_output = call_chat_model(
+        target_output, latency_ms, usage = call_chat_model_with_metrics(
             client=target_client,
             model=target_model,
             prompt=prompt,
@@ -233,6 +286,10 @@ def generate_target_outputs(
                 expected_answer=expected_answer,
                 category=category,
                 target_output=target_output,
+                target_latency_ms=round(latency_ms, 2) if latency_ms is not None else None,
+                target_prompt_tokens=usage.get("prompt_tokens"),
+                target_completion_tokens=usage.get("completion_tokens"),
+                target_total_tokens=usage.get("total_tokens"),
             )
         )
 
@@ -386,6 +443,11 @@ def main() -> None:
         judge_model=args.judge_model,
     )
     report["examples"] = [r.to_dict() for r in records]
+    report["target_model"] = args.target_model
+    report["judge_model"] = args.judge_model
+    report["target_provider"] = args.target_provider
+    report["judge_provider"] = args.judge_provider
+    report.update(aggregate_target_run_metrics(records))
 
     save_json(report_path, report)
 
