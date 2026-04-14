@@ -675,14 +675,21 @@ def parse_args() -> argparse.Namespace:
             "EVAL_DATASET, EVAL_OUTPUTS, EVAL_REPORT, TARGET_MODEL, JUDGE_MODEL.\n\n"
             "Example (Z.AI GLM native API, recommended):\n"
             "  python llm_eval_framework.py --target-provider zai --target-model glm-4.7 --judge-provider gemini\n"
+            "Example (first 10 rows only):\n"
+            "  python llm_eval_framework.py --dataset dataset.sample.json --max-examples 10 --judge-provider gemini\n"
             "Example (LiteLLM + OpenAI; key is applied like os.environ['OPENAI_API_KEY']):\n"
             "  python llm_eval_framework.py --target-provider litellm --target-model gpt-4o-mini "
             "--target-api-key sk-... --judge-provider gemini\n"
-            "Example (LiteLLM + Z.AI; uses ZAI_API_KEY for upstream — get that from z.ai, not from LiteLLM UI):\n"
+            "Example (LiteLLM + Z.AI direct from this machine; set ZAI_API_KEY or --target-api-key from z.ai):\n"
             "  python llm_eval_framework.py --target-provider litellm --target-model zai/glm-4.7 --judge-provider gemini\n"
-            "Example (GLM via LiteLLM **proxy** key — key is the proxy virtual/master key, Z.AI key lives on server):\n"
-            "  python llm_eval_framework.py --target-provider litellm --target-base-url https://YOUR_PROXY.run.app "
-            "--target-model zai/glm-4.7 --target-api-key sk-litellm-... --judge-provider gemini\n"
+            "PowerShell — GLM-4.7 via LiteLLM proxy (proxy key only; upstream Z.AI key is on the proxy server).\n"
+            "  Set GEMINI_API_KEY for the judge, or add --judge-api-key ...\n"
+            "  python llm_eval_framework.py `\n"
+            "    --target-provider litellm `\n"
+            "    --target-base-url https://litellm-proxy-209961497089.me-central2.run.app `\n"
+            "    --target-model zai/glm-4.7 `\n"
+            "    --target-api-key sk-... `\n"
+            "    --judge-provider gemini\n"
             "Example (LiteLLM OpenAI-compatible proxy; use the model alias from your proxy, bare or openai/...):\n"
             "  python llm_eval_framework.py --target-provider litellm --target-base-url https://YOUR_PROXY.run.app "
             "--target-model gpt-4o --target-api-key sk-... --judge-provider gemini\n"
@@ -750,6 +757,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--judge-base-url", default=os.getenv("JUDGE_BASE_URL"), help="Optional base URL for LLM B.")
     parser.add_argument("--target-system-prompt", default=None, help="Optional system prompt for target model.")
+    parser.add_argument(
+        "--max-examples",
+        type=int,
+        default=None,
+        help="Run only the first N examples after loading the dataset (default: all rows).",
+    )
     return parser.parse_args()
 
 
@@ -777,6 +790,11 @@ def main() -> None:
     report_path = Path(args.report)
 
     dataset = validate_dataset(load_json(dataset_path))
+    dataset_full_count = len(dataset)
+    if args.max_examples is not None:
+        if args.max_examples < 1:
+            raise ValueError("--max-examples must be >= 1.")
+        dataset = dataset[: args.max_examples]
 
     target_client: Optional[OpenAI] = None
     target_base_url = args.target_base_url
@@ -824,6 +842,10 @@ def main() -> None:
     report["judge_model"] = args.judge_model
     report["target_provider"] = args.target_provider
     report["judge_provider"] = args.judge_provider
+    if args.max_examples is not None:
+        report["max_examples"] = args.max_examples
+        report["dataset_rows_in_file"] = dataset_full_count
+        report["dataset_rows_evaluated"] = len(records)
     report.update(aggregate_target_run_metrics(records))
 
     save_json(report_path, report)
