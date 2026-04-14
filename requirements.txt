@@ -1,1 +1,2 @@
 openai
+litellm>=1.55.0

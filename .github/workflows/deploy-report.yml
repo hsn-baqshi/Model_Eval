@@ -35,8 +35,11 @@ jobs:
 
       - name: Run evaluation
         env:
+          # Target: GLM 4.7 via Z.AI native OpenAI-compatible API. Add repo secret ZAI_API_KEY.
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          TARGET_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          # Judge: Gemini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TARGET_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           JUDGE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LLM_MAX_RETRIES: "12"
           LLM_RETRY_DELAY_SECONDS: "6"
@@ -46,9 +49,9 @@ jobs:
             --dataset dataset.sample.json \
             --outputs model_a_outputs.json \
             --report eval_report.json \
-            --target-provider gemini \
+            --target-provider zai \
+            --target-model glm-4.7 \
             --judge-provider gemini \
-            --target-model gemini-2.5-flash \
             --judge-model gemini-2.5-flash
 
       - name: Prepare Pages artifact

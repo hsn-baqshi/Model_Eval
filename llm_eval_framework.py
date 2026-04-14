@@ -4,11 +4,19 @@ import os
 import random
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from openai import APIConnectionError, InternalServerError, NotFoundError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    AuthenticationError,
+    InternalServerError,
+    NotFoundError,
+    OpenAI,
+    RateLimitError,
+)
 
 
 SENSITIVE_KEYWORDS = {
@@ -97,6 +105,24 @@ def parse_judge_json(raw_text: str) -> Dict[str, Any]:
     return json.loads(raw_text)
 
 
+def _usage_from_litellm_response(response: Any) -> Dict[str, Optional[int]]:
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+    out: Dict[str, Optional[int]] = {k: None for k in keys}
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return out
+    if isinstance(usage, dict):
+        for k in keys:
+            v = usage.get(k)
+            if v is not None:
+                try:
+                    out[k] = int(v)
+                except (TypeError, ValueError):
+                    out[k] = None
+        return out
+    return _parse_usage_tokens(response)
+
+
 def _parse_usage_tokens(response: Any) -> Dict[str, Optional[int]]:
     keys = ("prompt_tokens", "completion_tokens", "total_tokens")
     out: Dict[str, Optional[int]] = {k: None for k in keys}
@@ -141,6 +167,32 @@ def call_chat_model_with_metrics(
             latency_ms = (time.perf_counter() - t0) * 1000.0
             text = response.choices[0].message.content or ""
             return text, latency_ms, _parse_usage_tokens(response)
+        except AuthenticationError as exc:
+            base = str(getattr(client, "base_url", "") or "").lower()
+            err_l = str(exc).lower()
+            if "z.ai" in base or "token expired or incorrect" in err_l:
+                raise ValueError(
+                    "Z.AI returned 401 (token expired or incorrect). The key was not accepted for "
+                    "https://api.z.ai/ (direct Z.AI OpenAI-compatible API).\n"
+                    "- For **--target-provider zai**, you must use an API key from the **Z.AI console** "
+                    "(https://z.ai/model-api), not a key that only exists inside LiteLLM.\n"
+                    "- If your key was **created in / for LiteLLM** (virtual key, master key, UI token): that key "
+                    "authenticates **your LiteLLM proxy**, not Z.AI upstream. Call GLM through the proxy instead, e.g. "
+                    "`--target-provider litellm --target-base-url https://YOUR_PROXY.run.app` "
+                    "`--target-model zai/glm-4.7 --target-api-key <LiteLLM_key>` "
+                    "(or `--target-provider openai` with the same base URL and model name your proxy exposes).\n"
+                    "- Do not use Google Gemini or OpenAI keys as ZAI_API_KEY.\n"
+                    "- After changing env vars, restart the terminal so Python sees the new key."
+                ) from exc
+            if "generativelanguage.googleapis.com" in base or "googleapis.com" in base:
+                raise ValueError(
+                    "Google Gemini returned 401. Set GEMINI_API_KEY / JUDGE_API_KEY (or --judge-api-key) with a "
+                    "valid key from Google AI Studio; ensure billing/access matches the project for that key."
+                ) from exc
+            raise ValueError(
+                "API authentication failed (401). Verify the API key and provider (--target-api-key, "
+                "ZAI_API_KEY, GEMINI_API_KEY, etc.) match the configured base URL."
+            ) from exc
         except NotFoundError as exc:
             error_text = str(exc)
             if "no longer available to new users" in error_text.lower() or "status': 'NOT_FOUND'" in error_text:
@@ -181,6 +233,189 @@ def call_chat_model_with_metrics(
 
     # Defensive fallback; function should have returned or raised above.
     raise RuntimeError("Failed to get model response after retries.")
+
+
+def _litellm_env_var_for_model(model: str) -> str:
+    """Which provider API key env var LiteLLM reads for this ``model`` id (unified completion pattern)."""
+    m = model.lower()
+    if m.startswith("zai/"):
+        return "ZAI_API_KEY"
+    if m.startswith("deepseek/"):
+        return "DEEPSEEK_API_KEY"
+    if m.startswith("anthropic/") or m.startswith("claude-"):
+        return "ANTHROPIC_API_KEY"
+    if (
+        m.startswith("gemini/")
+        or m.startswith("vertex_ai/")
+        or m.startswith("google/")
+        or m.startswith("gemini-")
+        or "/gemini" in m
+    ):
+        return "GEMINI_API_KEY"
+    # e.g. gpt-3.5-turbo, gpt-4, azure deployments, openai/...
+    return "OPENAI_API_KEY"
+
+
+@contextmanager
+def _litellm_temp_api_key_env(env_var: str, api_key: str):
+    """Set ``os.environ[env_var]`` for the duration of the block, then restore."""
+    prev = os.environ.get(env_var)
+    os.environ[env_var] = api_key
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(env_var, None)
+        else:
+            os.environ[env_var] = prev
+
+
+def _normalize_openai_compat_base_url(url: str) -> str:
+    """Ensure ``.../v1`` suffix for OpenAI-compatible clients (LiteLLM proxy, etc.)."""
+    u = url.strip().rstrip("/")
+    if not u:
+        raise ValueError("Target base URL is empty.")
+    if u.endswith("/v1"):
+        return u
+    return f"{u}/v1"
+
+
+def _litellm_model_for_openai_compat_proxy(model: str) -> str:
+    """LiteLLM requires a ``provider/model`` id; bare names (e.g. ``gpt-4o``) are ambiguous.
+
+    For an OpenAI-compatible proxy, default bare ids to ``openai/<name>``. If the user
+    already passed a slash (e.g. ``gemini/gemini-2.5-flash``), leave it unchanged.
+    """
+    m = model.strip()
+    if not m:
+        raise ValueError("Target model is empty.")
+    if "/" in m:
+        return m
+    return f"openai/{m}"
+
+
+def call_litellm_with_metrics(
+    model: str,
+    api_key: str,
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    api_base: Optional[str] = None,
+) -> Tuple[str, Optional[float], Dict[str, Optional[int]]]:
+    """Target completions via LiteLLM (e.g. zai/glm-4.7). Requires ``litellm`` package.
+
+    If ``api_base`` is set (OpenAI-compatible LiteLLM proxy), the key is sent as proxy auth
+    (``OPENAI_API_KEY`` for the duration of the call) regardless of ``model`` spelling, because
+    upstream provider keys are configured on the proxy server.
+    """
+    try:
+        from litellm import completion as litellm_completion
+        from litellm.exceptions import AuthenticationError as LitellmAuthenticationError
+    except ImportError as exc:
+        raise ImportError("Install litellm: pip install litellm") from exc
+
+    key = (api_key or "").strip().lstrip("\ufeff")
+    if not key:
+        raise ValueError("LiteLLM target requires a non-empty API key.")
+
+    messages: List[Dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    max_retries = int(os.getenv("LLM_MAX_RETRIES", "8"))
+    retry_delay_seconds = float(os.getenv("LLM_RETRY_DELAY_SECONDS", "5"))
+    max_retry_delay_seconds = float(os.getenv("LLM_MAX_RETRY_DELAY_SECONDS", "90"))
+
+    proxy_base = (api_base or "").strip()
+    resolved_model = _litellm_model_for_openai_compat_proxy(model) if proxy_base else model.strip()
+    if not resolved_model:
+        raise ValueError("Target model is empty.")
+
+    env_var = (
+        "OPENAI_API_KEY"
+        if proxy_base
+        else _litellm_env_var_for_model(model)
+    )
+    completion_kwargs: Dict[str, Any] = {
+        "model": resolved_model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if proxy_base:
+        completion_kwargs["api_base"] = _normalize_openai_compat_base_url(proxy_base)
+
+    for attempt in range(max_retries + 1):
+        try:
+            t0 = time.perf_counter()
+            # Same pattern as LiteLLM docs: set provider key in the environment, then call
+            # ``completion(model=..., messages=...)`` without passing ``api_key=``.
+            with _litellm_temp_api_key_env(env_var, key):
+                response = litellm_completion(**completion_kwargs)
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            text = ""
+            if getattr(response, "choices", None):
+                ch0 = response.choices[0]
+                msg = getattr(ch0, "message", None)
+                if msg is not None:
+                    text = getattr(msg, "content", None) or ""
+            return text, latency_ms, _usage_from_litellm_response(response)
+        except Exception as exc:
+            err_s = str(exc)
+            err_l = err_s.lower()
+            if isinstance(exc, LitellmAuthenticationError) or (
+                "401" in err_s
+                and (
+                    "token" in err_l
+                    or "invalid_api_key" in err_l
+                    or "incorrect api key" in err_l
+                )
+            ):
+                hints: List[str] = []
+                if env_var == "OPENAI_API_KEY" and "platform.openai.com" in err_l:
+                    hints.append(
+                        "LiteLLM sent this request to **OpenAI**. Use a valid key from "
+                        "https://platform.openai.com/account/api-keys — or if you meant **Gemini**, "
+                        "use model id `gemini/gemini-2.5-flash` (or `--target-provider gemini`), not a bare `gpt-*` route."
+                    )
+                if env_var == "GEMINI_API_KEY":
+                    hints.append(
+                        "Use a **Google AI Studio / Gemini** key (GEMINI_API_KEY or `--target-api-key`), not an OpenAI sk- key."
+                    )
+                hint = ("\n- " + "\n- ".join(hints)) if hints else ""
+                raise ValueError(
+                    "LiteLLM authentication failed (401 / invalid key).\n"
+                    f"- For this model id, the script sets env var **{env_var}** for the duration of the call.\n"
+                    "- For zai/glm-4.7 use a Z.AI key (https://z.ai/model-api).\n"
+                    "- For gpt-* use a real OpenAI key, or change model/provider as below.\n"
+                    "- For GLM without LiteLLM: --target-provider zai --target-model glm-4.7"
+                    f"{hint}"
+                ) from exc
+            err = str(exc).lower()
+            if attempt >= max_retries:
+                raise
+            # Retry on rate limits, overload, and transient network-ish failures (not 401).
+            if any(
+                s in err
+                for s in (
+                    "rate limit",
+                    "429",
+                    "503",
+                    "502",
+                    "500",
+                    "timeout",
+                    "unavailable",
+                    "connection",
+                    "temporarily",
+                )
+            ):
+                sleep_seconds = min(retry_delay_seconds * (2 ** attempt), max_retry_delay_seconds)
+                sleep_seconds += random.uniform(0.0, 1.0)
+                time.sleep(sleep_seconds)
+                continue
+            raise
+
+    raise RuntimeError("Failed to get LiteLLM response after retries.")
 
 
 def call_chat_model(
@@ -262,9 +497,12 @@ SENSITIVE_BY_HEURISTIC: {str(sensitive).lower()}
 
 def generate_target_outputs(
     dataset: List[Dict[str, Any]],
-    target_client: OpenAI,
+    target_provider: str,
+    target_client: Optional[OpenAI],
     target_model: str,
     target_system_prompt: Optional[str],
+    target_api_key: Optional[str],
+    target_base_url: Optional[str] = None,
 ) -> List[EvalRecord]:
     records: List[EvalRecord] = []
 
@@ -273,13 +511,29 @@ def generate_target_outputs(
         expected_answer = str(item["answer"])
         category = item.get("category")
 
-        target_output, latency_ms, usage = call_chat_model_with_metrics(
-            client=target_client,
-            model=target_model,
-            prompt=prompt,
-            system_prompt=target_system_prompt,
-            temperature=0.0,
-        )
+        if target_provider == "litellm":
+            if not target_api_key:
+                raise ValueError("LiteLLM target requires an API key (e.g. ZAI_API_KEY or --target-api-key).")
+            target_output, latency_ms, usage = call_litellm_with_metrics(
+                model=target_model,
+                api_key=target_api_key,
+                prompt=prompt,
+                system_prompt=target_system_prompt,
+                temperature=0.0,
+                api_base=target_base_url,
+            )
+        else:
+            if target_client is None:
+                raise ValueError("OpenAI-compatible target requires a configured client.")
+            # Z.AI OpenAI-compatible API rejects temperature=0 (see Z.AI docs).
+            temp = 0.01 if target_provider == "zai" else 0.0
+            target_output, latency_ms, usage = call_chat_model_with_metrics(
+                client=target_client,
+                model=target_model,
+                prompt=prompt,
+                system_prompt=target_system_prompt,
+                temperature=temp,
+            )
 
         records.append(
             EvalRecord(
@@ -356,24 +610,120 @@ def validate_dataset(dataset: Any) -> List[Dict[str, Any]]:
 
 
 def create_client(api_key: str, base_url: Optional[str]) -> OpenAI:
-    kwargs: Dict[str, Any] = {"api_key": api_key}
+    key = (api_key or "").strip().lstrip("\ufeff")
+    kwargs: Dict[str, Any] = {"api_key": key}
     if base_url:
         kwargs["base_url"] = base_url
     return OpenAI(**kwargs)
 
 
+def resolve_target_api_key(args: argparse.Namespace) -> Optional[str]:
+    """CLI ``--target-api-key`` wins; otherwise env vars depend on ``--target-provider``."""
+    if getattr(args, "target_api_key", None):
+        s = str(args.target_api_key).strip()
+        return s or None
+    p = args.target_provider
+    if p == "zai":
+        v = os.getenv("TARGET_API_KEY") or os.getenv("ZAI_API_KEY") or os.getenv("ZHIPU_API_KEY")
+        return v.strip() if v else None
+    if p == "litellm":
+        proxy_base = (getattr(args, "target_base_url", None) or "").strip()
+        if proxy_base:
+            v = (
+                os.getenv("TARGET_API_KEY")
+                or os.getenv("LITELLM_API_KEY")
+                or os.getenv("OPENAI_API_KEY")
+            )
+            return v.strip() if v else None
+        m = (args.target_model or "").lower()
+        if m.startswith("zai/"):
+            v = os.getenv("TARGET_API_KEY") or os.getenv("ZAI_API_KEY") or os.getenv("ZHIPU_API_KEY")
+            return v.strip() if v else None
+        if m.startswith("deepseek/"):
+            v = os.getenv("TARGET_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+            return v.strip() if v else None
+        if m.startswith("anthropic/") or m.startswith("claude-"):
+            v = os.getenv("TARGET_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+            return v.strip() if v else None
+        if (
+            m.startswith("gemini/")
+            or m.startswith("vertex_ai/")
+            or m.startswith("google/")
+            or m.startswith("gemini-")
+            or "/gemini" in m
+        ):
+            v = os.getenv("TARGET_API_KEY") or os.getenv("GEMINI_API_KEY")
+            return v.strip() if v else None
+        # OpenAI and other routes: use OPENAI_API_KEY (not GEMINI_API_KEY).
+        v = os.getenv("TARGET_API_KEY") or os.getenv("OPENAI_API_KEY")
+        return v.strip() if v else None
+    v = (
+        os.getenv("TARGET_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("ZAI_API_KEY")
+        or os.getenv("ZHIPU_API_KEY")
+    )
+    return v.strip() if v else None
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LLM A vs Ground Truth evaluator using LLM B as judge.")
-    parser.add_argument("--dataset", required=True, help="Path to dataset JSON file.")
-    parser.add_argument("--outputs", required=True, help="Path to save model A outputs JSON.")
-    parser.add_argument("--report", required=True, help="Path to save final evaluation report JSON.")
-    parser.add_argument("--target-model", required=True, help="Model name for target LLM A.")
-    parser.add_argument("--judge-model", required=True, help="Model name for judge LLM B.")
+    parser = argparse.ArgumentParser(
+        description="LLM A vs Ground Truth evaluator using LLM B as judge.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Defaults match the sample repo layout. Override with flags or env: "
+            "EVAL_DATASET, EVAL_OUTPUTS, EVAL_REPORT, TARGET_MODEL, JUDGE_MODEL.\n\n"
+            "Example (Z.AI GLM native API, recommended):\n"
+            "  python llm_eval_framework.py --target-provider zai --target-model glm-4.7 --judge-provider gemini\n"
+            "Example (LiteLLM + OpenAI; key is applied like os.environ['OPENAI_API_KEY']):\n"
+            "  python llm_eval_framework.py --target-provider litellm --target-model gpt-4o-mini "
+            "--target-api-key sk-... --judge-provider gemini\n"
+            "Example (LiteLLM + Z.AI; uses ZAI_API_KEY for upstream — get that from z.ai, not from LiteLLM UI):\n"
+            "  python llm_eval_framework.py --target-provider litellm --target-model zai/glm-4.7 --judge-provider gemini\n"
+            "Example (GLM via LiteLLM **proxy** key — key is the proxy virtual/master key, Z.AI key lives on server):\n"
+            "  python llm_eval_framework.py --target-provider litellm --target-base-url https://YOUR_PROXY.run.app "
+            "--target-model zai/glm-4.7 --target-api-key sk-litellm-... --judge-provider gemini\n"
+            "Example (LiteLLM OpenAI-compatible proxy; use the model alias from your proxy, bare or openai/...):\n"
+            "  python llm_eval_framework.py --target-provider litellm --target-base-url https://YOUR_PROXY.run.app "
+            "--target-model gpt-4o --target-api-key sk-... --judge-provider gemini\n"
+            "Same proxy using the OpenAI client path (no litellm package for target):\n"
+            "  python llm_eval_framework.py --target-provider openai --target-base-url https://YOUR_PROXY.run.app/v1 "
+            "--target-model gpt-4o --target-api-key sk-... --judge-provider gemini"
+        ),
+    )
+    parser.add_argument(
+        "--dataset",
+        default=os.getenv("EVAL_DATASET", "dataset.sample.json"),
+        help="Path to dataset JSON (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--outputs",
+        default=os.getenv("EVAL_OUTPUTS", "model_a_outputs.json"),
+        help="Path to save target model outputs (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--report",
+        default=os.getenv("EVAL_REPORT", "eval_report.json"),
+        help="Path to save evaluation report JSON (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--target-model",
+        default=os.getenv("TARGET_MODEL", "gemini-2.5-flash"),
+        help="Target model id (default: %(default)s). For --target-provider zai use glm-4.7; for litellm use zai/glm-4.7. "
+        "With --target-base-url + litellm, a bare name (e.g. gpt-4o) is sent as openai/gpt-4o; use provider/model "
+        "for non-OpenAI routes (see https://docs.litellm.ai/docs/providers ).",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=os.getenv("JUDGE_MODEL", "gemini-2.5-flash"),
+        help="Judge model id (default: %(default)s).",
+    )
     parser.add_argument(
         "--target-provider",
-        choices=["openai", "gemini", "deepseek"],
+        choices=["openai", "gemini", "deepseek", "litellm", "zai"],
         default=os.getenv("TARGET_PROVIDER", "openai"),
-        help="Provider for target LLM A.",
+        help="Target LLM A. zai = direct https://api.z.ai (needs Z.AI console key). litellm = LiteLLM SDK; use "
+        "--target-base-url + proxy key if the key was issued by LiteLLM, not zai.",
     )
     parser.add_argument(
         "--judge-provider",
@@ -383,15 +733,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--target-api-key",
-        default=os.getenv("TARGET_API_KEY") or os.getenv("GEMINI_API_KEY"),
-        help="API key for LLM A. For Gemini, GEMINI_API_KEY is also accepted.",
+        default=None,
+        help="API key for LLM A (overrides env). For --target-provider zai use a Z.AI key. For a LiteLLM **proxy** key, "
+        "use --target-base-url + litellm (or openai) — do not use that key with --target-provider zai.",
     )
     parser.add_argument(
         "--judge-api-key",
         default=os.getenv("JUDGE_API_KEY") or os.getenv("GEMINI_API_KEY"),
         help="API key for LLM B. For Gemini, GEMINI_API_KEY is also accepted.",
     )
-    parser.add_argument("--target-base-url", default=os.getenv("TARGET_BASE_URL"), help="Optional base URL for LLM A.")
+    parser.add_argument(
+        "--target-base-url",
+        default=os.getenv("TARGET_BASE_URL"),
+        help="Optional base URL for LLM A. For --target-provider litellm, use your OpenAI-compatible LiteLLM proxy "
+        "host (with or without /v1; normalized automatically). Key: TARGET_API_KEY, LITELLM_API_KEY, or OPENAI_API_KEY.",
+    )
     parser.add_argument("--judge-base-url", default=os.getenv("JUDGE_BASE_URL"), help="Optional base URL for LLM B.")
     parser.add_argument("--target-system-prompt", default=None, help="Optional system prompt for target model.")
     return parser.parse_args()
@@ -400,24 +756,41 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    if not args.target_api_key:
-        raise ValueError("Missing target API key. Use --target-api-key, TARGET_API_KEY, or GEMINI_API_KEY.")
+    dataset_path = Path(args.dataset)
+    if not dataset_path.is_file():
+        raise ValueError(
+            f"Dataset file not found: {dataset_path.resolve()}. "
+            "Pass --dataset PATH or set EVAL_DATASET."
+        )
+
+    target_api_key = resolve_target_api_key(args)
+    if not target_api_key:
+        raise ValueError(
+            "Missing target API key. Pass --target-api-key or set env vars: "
+            "for zai/litellm use ZAI_API_KEY or TARGET_API_KEY (not GEMINI_API_KEY); "
+            "for Gemini target use GEMINI_API_KEY or TARGET_API_KEY."
+        )
     if not args.judge_api_key:
         raise ValueError("Missing judge API key. Use --judge-api-key or JUDGE_API_KEY.")
 
-    dataset_path = Path(args.dataset)
     outputs_path = Path(args.outputs)
     report_path = Path(args.report)
 
     dataset = validate_dataset(load_json(dataset_path))
 
+    target_client: Optional[OpenAI] = None
     target_base_url = args.target_base_url
-    if args.target_provider == "gemini" and not target_base_url:
-        # Gemini supports the OpenAI-compatible API at this base URL.
-        target_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    if args.target_provider == "deepseek" and not target_base_url:
-        # DeepSeek supports an OpenAI-compatible API at this base URL.
-        target_base_url = "https://api.deepseek.com"
+    if args.target_provider != "litellm":
+        if args.target_provider == "gemini" and not target_base_url:
+            # Gemini supports the OpenAI-compatible API at this base URL.
+            target_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        if args.target_provider == "deepseek" and not target_base_url:
+            # DeepSeek supports an OpenAI-compatible API at this base URL.
+            target_base_url = "https://api.deepseek.com"
+        if args.target_provider == "zai" and not target_base_url:
+            # Z.AI OpenAI-compatible API (see https://docs.z.ai/guides/develop/openai/python).
+            target_base_url = "https://api.z.ai/api/paas/v4/"
+        target_client = create_client(target_api_key, target_base_url)
 
     judge_base_url = args.judge_base_url
     if args.judge_provider == "gemini" and not judge_base_url:
@@ -427,14 +800,16 @@ def main() -> None:
         # DeepSeek supports an OpenAI-compatible API at this base URL.
         judge_base_url = "https://api.deepseek.com"
 
-    target_client = create_client(args.target_api_key, target_base_url)
     judge_client = create_client(args.judge_api_key, judge_base_url)
 
     records = generate_target_outputs(
         dataset=dataset,
+        target_provider=args.target_provider,
         target_client=target_client,
         target_model=args.target_model,
         target_system_prompt=args.target_system_prompt,
+        target_api_key=target_api_key,
+        target_base_url=args.target_base_url if args.target_provider == "litellm" else None,
     )
 
     save_json(outputs_path, [r.to_dict() for r in records])

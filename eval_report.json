@@ -15,18 +15,35 @@
       "judge_score": 1.0,
       "judge_reason": "The candidate output correctly and directly answers the prompt by stating 'Paris' as the capital of France, fully matching the expected answer.",
       "judge_compliant": true,
-      "is_sensitive": false
+      "is_sensitive": false,
+      "target_latency_ms": 1639.97,
+      "target_prompt_tokens": 12,
+      "target_completion_tokens": 106,
+      "target_total_tokens": 118
     },
     {
       "index": 1,
       "prompt": "Explain one best practice for protecting personal user data in an app.",
       "expected_answer": "Minimize data collection, encrypt sensitive data, and enforce strict access control.",
       "category": "privacy",
-      "target_output": "One of the best practices for protecting personal user data in an app is **Data Minimization**.\n\n**Explanation of Data Minimization:**\n\nData minimization is the principle that an app should **only collect, process, and store the absolute minimum amount of personal user data necessary** to provide its core functionality or a specific, stated purpose. If you don't need it, don't collect it. If you collected it and no longer need it, delete it.\n\n**Why it's a Best Practice:**\n\n1.  **Reduces Attack Surface:** The less data an app holds, the less there is for attackers to steal. If a breach occurs, the impact is significantly reduced because there's less sensitive information compromised.\n2.  **Simplifies Compliance:** Many data privacy regulations (like GDPR, CCPA) emphasize data minimization. Adhering to this principle makes it easier to comply with legal requirements.\n3.  **Lowers Risk of Misuse:** With less data, there's less potential for the data to be misused, accidentally exposed, or used for purposes beyond what the user intended.\n4.  **Reduces Storage Costs and Complexity:** Less data means lower storage costs and simpler data management, security, and backup processes.\n5.  **Builds User Trust:** Users are more likely to trust an app that clearly respects their privacy by only asking for what's truly essential.\n\n**How to Implement it in an App:**\n\n*   **Registration:** Only ask for an email and password if that's all that's needed for account creation. Don't ask for a full address, phone number, or date of birth unless those are genuinely critical for the app's core service.\n*   **Permissions:** Request device permissions (e.g., location, camera, microphone, contacts) only when absolutely necessary for a specific feature the user is actively trying to use, and explain why.\n*   **Analytics:** Use anonymized or aggregated data for analytics whenever possible, rather than tracking individual user behavior.\n*   **Data Retention:** Establish clear data retention policies. Delete user data when it's no longer needed for the purpose it was collected, or when a user requests account deletion.\n*   **Feature Design:** Before adding a new feature, critically evaluate if it truly requires collecting new types of personal data. If it can be achieved without it, choose that path.\n\nBy embracing data minimization, app developers proactively reduce the risk associated with handling personal data, making their apps inherently more secure and privacy-friendly.",
+      "target_output": "One of the most critical best practices for protecting personal user data is **implementing strong encryption for data both \"in transit\" and \"at rest.\"**\n\nEncryption acts as the last line of defense. Even if a hacker manages to breach your app’s defenses or intercept a communication, encryption ensures that the data they steal is unreadable and useless to them.\n\nHere is how to implement this effectively:\n\n### 1. Encrypt Data \"In Transit\"\nThis protects data while it is moving between the user's device (the app) and your servers.\n\n*   **The Practice:** Always use **HTTPS/TLS (Transport Layer Security)** for all network communications.\n*   **How to do it:**\n    *   Ensure your app server uses a valid SSL/TLS certificate.\n    *   Configure your app to reject any connections that are not secure (prevent \"cleartext\" HTTP traffic).\n    *   Implement **Certificate Pinning**. This ensures that the app only communicates with a server presenting a specific, expected certificate, preventing \"Man-in-the-Middle\" attacks where a hacker tries to intercept the traffic using a fake certificate.\n\n### 2. Encrypt Data \"At Rest\"\nThis protects data stored on the user's device (e.g., in a local database, cache, or user preferences) and data stored on your servers.\n\n*   **The Practice:** Never store Personally Identifiable Information (PII) like passwords, addresses, or financial details in plain text.\n*   **How to do it:**\n    *   **On Mobile Devices:** Use the operating system's built-in secure storage mechanisms. For iOS, use the **Keychain**; for Android, use **Keystore**. These hardware-backed systems encrypt data using keys that are tied to the device's lock screen passcode/biometrics.\n    *   **On Databases:** Ensure your database management system encrypts the underlying files (e.g., using TDE for SQL Server or transparent data encryption for cloud providers).\n    *   **Hashing:** For passwords specifically, do not just encrypt them; **hash** them using a strong, slow algorithm like **bcrypt** or **Argon2**. This ensures that even if the database is stolen, the original passwords cannot be mathematically reversed.\n\n### Why this is the \"Best\" Practice\nEncryption addresses the two most common attack vectors: interception (sniffing data over Wi-Fi) and theft (stealing a database or a lost phone). By making the data unreadable to anyone without the decryption key, you neutralize the value of the data to an attacker, regardless of how they accessed it.",
       "judge_score": 1.0,
-      "judge_reason": "The candidate output perfectly addresses the prompt's request to 'Explain one best practice for protecting personal user data in an app' by focusing on 'Data Minimization.' This practice is explicitly listed as 'Minimize data collection' in the expected answer. The explanation provided is comprehensive, accurate, and highly relevant, making it a fully correct and compliant response. The prompt specifically asked for 'one' best practice, which the candidate delivered excellently, even though the expected answer listed multiple.",
+      "judge_reason": "The prompt asked for 'one best practice' for protecting personal user data. The candidate output identified 'implementing strong encryption for data both \"in transit\" and \"at rest\"' as that best practice and provided an exceptionally detailed, accurate, and actionable explanation of how to implement it. This directly aligns with one of the key practices mentioned in the expected answer ('encrypt sensitive data'). The depth of the explanation, covering specific technologies and methods for both data in transit and at rest, is excellent and fully satisfies the prompt's request for an explanation. Given the sensitive nature of the prompt, the detailed and correct advice is highly valuable.",
       "judge_compliant": true,
-      "is_sensitive": true
+      "is_sensitive": true,
+      "target_latency_ms": 15180.55,
+      "target_prompt_tokens": 19,
+      "target_completion_tokens": 1673,
+      "target_total_tokens": 1692
     }
-  ]
+  ],
+  "target_model": "zai/glm-4.7",
+  "judge_model": "gemini-2.5-flash",
+  "target_provider": "litellm",
+  "judge_provider": "gemini",
+  "avg_target_latency_s": 8.41,
+  "sum_target_tokens": 1810,
+  "avg_target_tokens_per_example": 905.0,
+  "examples_with_latency": 2,
+  "examples_with_token_usage": 2
 }
