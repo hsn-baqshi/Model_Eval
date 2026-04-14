@@ -199,8 +199,10 @@ def call_chat_model(
 def aggregate_target_run_metrics(records: List[EvalRecord]) -> Dict[str, Any]:
     latencies = [r.target_latency_ms for r in records if r.target_latency_ms is not None]
     totals = [r.target_total_tokens for r in records if r.target_total_tokens is not None]
+    avg_ms = (sum(latencies) / len(latencies)) if latencies else None
+    avg_s = round(avg_ms / 1000.0, 3) if avg_ms is not None else None
     return {
-        "avg_target_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+        "avg_target_latency_s": avg_s,
         "sum_target_tokens": int(sum(totals)) if totals else None,
         "avg_target_tokens_per_example": round(sum(totals) / len(totals), 2) if totals else None,
         "examples_with_latency": len(latencies),

@@ -482,11 +482,18 @@
       return `<div class="row"><span class="k">${escapeHtml(key)}</span><span class="v">${innerHtml}</span></div>`;
     }
 
-    function formatLatencyMs(value) {
-      if (value == null || value === "") return "—";
-      const n = Number(value);
+    function formatLatencySeconds(valueMs) {
+      if (valueMs == null || valueMs === "") return "—";
+      const n = Number(valueMs);
       if (Number.isNaN(n)) return "—";
-      return `${n.toFixed(1)} ms`;
+      return `${(n / 1000).toFixed(3)} s`;
+    }
+
+    function scoreToPercent(value) {
+      const n = Number(value ?? 0);
+      if (Number.isNaN(n)) return "0%";
+      const pct = n * 100;
+      return `${pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)}%`;
     }
 
     function formatTokenLine(ex) {
@@ -516,9 +523,12 @@
     }
 
     function formatAggLatency(data) {
-      const v = data.avg_target_latency_ms;
-      if (v == null || v === "") return "—";
-      return `${Number(v).toFixed(1)} ms (mean)`;
+      let sec = data.avg_target_latency_s;
+      if (sec == null && data.avg_target_latency_ms != null) {
+        sec = Number(data.avg_target_latency_ms) / 1000;
+      }
+      if (sec == null || sec === "") return "—";
+      return `${Number(sec).toFixed(3)} s (mean)`;
     }
 
     function formatAggTokens(data) {
@@ -565,7 +575,7 @@
         <div class="panel">
           <h2>Summary ${statusBadge}</h2>
           <div class="grid">
-            ${metric("Average Score", Number(data.average_score ?? 0).toFixed(3))}
+            ${metric("Average score", scoreToPercent(data.average_score))}
             ${metric("Evaluated", `${data.evaluated_count ?? 0} / ${data.total_count ?? 0}`)}
             ${metric("Avg target latency", formatAggLatency(data))}
             ${metric("Target tokens", formatAggTokens(data))}
@@ -587,12 +597,12 @@
           <div class="panel example">
             <h3>Example #${escapeHtml(ex.index)}</h3>
             ${rowBlock("Status", `${comp} ${sensitivity}`)}
-            ${rowBlock("Score", escapeHtml(Number(ex.judge_score ?? 0).toFixed(3)))}
+            ${rowBlock("Score", escapeHtml(scoreToPercent(ex.judge_score)))}
             ${rowBlock("Category", escapeHtml(ex.category ?? ""))}
             ${rowBlock("Prompt", escapeHtml(ex.prompt ?? ""))}
             ${rowBlock("Expected", escapeHtml(ex.expected_answer ?? ""))}
             ${rowBlock("Target Output", escapeHtml(ex.target_output ?? ""))}
-            ${rowBlock("Target latency", escapeHtml(formatLatencyMs(ex.target_latency_ms)))}
+            ${rowBlock("Target latency", escapeHtml(formatLatencySeconds(ex.target_latency_ms)))}
             ${rowBlock("Target tokens", escapeHtml(formatTokenLine(ex)))}
             ${judgeReasonBlock(ex)}
           </div>
