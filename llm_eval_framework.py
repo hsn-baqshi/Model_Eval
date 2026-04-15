@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import random
+import sys
 import re
 import time
 from contextlib import contextmanager
@@ -527,11 +528,22 @@ def generate_target_outputs(
     target_model: str,
     target_system_prompt: Optional[str],
     target_api_key: Optional[str],
-    target_base_url: Optional[str] = None,
+        target_base_url: Optional[str] = None,
 ) -> List[EvalRecord]:
     records: List[EvalRecord] = []
+    n = len(dataset)
+    print(
+        f"[progress] target model={target_model!r}: generating {n} output(s)…",
+        file=sys.stderr,
+        flush=True,
+    )
 
     for i, item in enumerate(dataset):
+        print(
+            f"[progress] target {target_model!r}: {i + 1}/{n}",
+            file=sys.stderr,
+            flush=True,
+        )
         prompt = str(item["prompt"])
         expected_answer = str(item["answer"])
         category = item.get("category")
@@ -586,6 +598,12 @@ def evaluate_outputs(
     total_score = 0.0
     evaluated = 0
     policy_fail_indices: List[int] = []
+    n = len(records)
+    print(
+        f"[progress] judge model={judge_model!r}: scoring {n} output(s)…",
+        file=sys.stderr,
+        flush=True,
+    )
 
     for record in records:
         result = judge_one_example(
@@ -603,6 +621,11 @@ def evaluate_outputs(
 
         evaluated += 1
         total_score += record.judge_score
+        print(
+            f"[progress] judge {judge_model!r}: {evaluated}/{n}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         if record.is_sensitive and not record.judge_compliant:
             policy_fail_indices.append(int(record.index))
@@ -952,6 +975,15 @@ def main() -> None:
             "dataset_rows_evaluated": len(dataset),
         }
 
+    print(
+        f"[progress] dataset={dataset_path.name} rows={len(dataset)}"
+        + (f" (file has {dataset_full_count})" if args.max_examples is not None else "")
+        + (f"; dual run (model B: {args.target_model_b})" if (args.target_model_b or "").strip() else "")
+        + ". Status lines go to stderr; final JSON on stdout.",
+        file=sys.stderr,
+        flush=True,
+    )
+
     judge_base_url = args.judge_base_url
     if args.judge_provider == "gemini" and not judge_base_url:
         judge_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -1075,11 +1107,13 @@ def main() -> None:
         )
         annotate_report_viewer_paths(dual_payload, source_ds_name, failed_out_name)
         save_json(report_path, dual_payload)
+        print("[progress] done. Writing report JSON to stdout.", file=sys.stderr, flush=True)
         print(json.dumps(dual_payload, indent=2))
     else:
         save_json(failed_out_path, failed_payload_a)
         annotate_report_viewer_paths(report_a, source_ds_name, failed_out_name)
         save_json(report_path, report_a)
+        print("[progress] done. Writing report JSON to stdout.", file=sys.stderr, flush=True)
         print(json.dumps(report_a, indent=2))
 
 
