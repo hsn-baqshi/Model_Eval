@@ -562,6 +562,70 @@
       outline-offset: 2px;
       transition: outline-color 0.2s ease;
     }
+
+    .dataset-toolbar {
+      display: none;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 16px 0 0;
+    }
+
+    .dataset-toolbar__btn {
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #b8f0ff;
+      background: rgba(0, 40, 55, 0.55);
+      border: 1px solid rgba(0, 212, 255, 0.35);
+      padding: 8px 16px;
+      cursor: pointer;
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+
+    .dataset-toolbar__btn:hover {
+      color: #e8ffff;
+      border-color: rgba(0, 255, 200, 0.45);
+      background: rgba(0, 60, 50, 0.35);
+    }
+
+    .dataset-json-panel {
+      margin-top: 14px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid rgba(0, 212, 255, 0.2);
+      max-height: min(70vh, 560px);
+      overflow: auto;
+      clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+    }
+
+    .dataset-json-panel[hidden] {
+      display: none !important;
+    }
+
+    .dataset-json-panel__title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .dataset-json-panel pre {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #c8e8f0;
+    }
+
+    .dataset-json-panel__err {
+      color: #ff9a9a;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
@@ -589,6 +653,14 @@
       <div id="hero-dual-layout" class="hero-dual-layout" aria-live="polite"></div>
       <div id="hero-subtitle" class="subtitle">
         Data source: <code>eval_report.dual.json</code> if present, else <code>eval_report.json</code> (same directory as this page)
+      </div>
+      <div id="dataset-toolbar" class="dataset-toolbar" aria-label="Dataset shortcuts">
+        <button type="button" id="btn-source-dataset" class="dataset-toolbar__btn">Source dataset</button>
+        <button type="button" id="btn-failed-dataset" class="dataset-toolbar__btn">Failed prompts</button>
+      </div>
+      <div id="dataset-json-panel" class="dataset-json-panel" hidden>
+        <div id="dataset-json-title" class="dataset-json-panel__title"></div>
+        <pre id="dataset-json-pre"></pre>
       </div>
     </header>
     <div id="app" class="panel panel--load">Initializing…</div>
@@ -891,6 +963,110 @@
       });
     }
 
+    const DEFAULT_SOURCE_DATASET = "dataset.sample.json";
+    const DEFAULT_FAILED_PROMPTS = "failed_prompts.json";
+
+    /** Set by successful report load; used by dataset toolbar fetches. */
+    let evalReportDatasetPaths = {
+      source: DEFAULT_SOURCE_DATASET,
+      failed: DEFAULT_FAILED_PROMPTS,
+    };
+
+    let datasetViewerActiveKind = null;
+
+    function hideDatasetJsonPanel() {
+      const panel = document.getElementById("dataset-json-panel");
+      if (panel) panel.hidden = true;
+      datasetViewerActiveKind = null;
+    }
+
+    function showDatasetJsonLoading(title, relPath) {
+      const panel = document.getElementById("dataset-json-panel");
+      const titleEl = document.getElementById("dataset-json-title");
+      const pre = document.getElementById("dataset-json-pre");
+      if (titleEl) titleEl.textContent = `${title} (${relPath})`;
+      if (pre) pre.textContent = "Loading…";
+      if (panel) panel.hidden = false;
+    }
+
+    function showDatasetJsonContent(title, relPath, payload) {
+      const panel = document.getElementById("dataset-json-panel");
+      const titleEl = document.getElementById("dataset-json-title");
+      const pre = document.getElementById("dataset-json-pre");
+      if (titleEl) titleEl.textContent = `${title} (${relPath})`;
+      if (pre) pre.textContent = JSON.stringify(payload, null, 2);
+      if (panel) panel.hidden = false;
+    }
+
+    function showDatasetJsonFetchError(title, relPath, status, message) {
+      const panel = document.getElementById("dataset-json-panel");
+      const titleEl = document.getElementById("dataset-json-title");
+      const pre = document.getElementById("dataset-json-pre");
+      if (titleEl) titleEl.textContent = `${title} (${relPath})`;
+      const msg = message != null && message !== "" ? String(message) : "Request failed";
+      const detail =
+        status != null
+          ? `HTTP ${status}: ${escapeHtml(msg)}`
+          : escapeHtml(msg);
+      if (pre) pre.innerHTML = `<span class="dataset-json-panel__err">${detail}</span>`;
+      if (panel) panel.hidden = false;
+    }
+
+    function setDatasetPathsFromReport(data) {
+      evalReportDatasetPaths = {
+        source: (data && data.source_dataset) || DEFAULT_SOURCE_DATASET,
+        failed: (data && data.failed_prompts_dataset) || DEFAULT_FAILED_PROMPTS,
+      };
+      const tb = document.getElementById("dataset-toolbar");
+      if (tb) tb.style.display = "flex";
+    }
+
+    function resetDatasetToolbar() {
+      evalReportDatasetPaths = {
+        source: DEFAULT_SOURCE_DATASET,
+        failed: DEFAULT_FAILED_PROMPTS,
+      };
+      const tb = document.getElementById("dataset-toolbar");
+      if (tb) tb.style.display = "none";
+      hideDatasetJsonPanel();
+    }
+
+    function wireDatasetViewerOnce() {
+      if (wireDatasetViewerOnce._done) return;
+      wireDatasetViewerOnce._done = true;
+      document.body.addEventListener("click", async (ev) => {
+        const srcBtn = ev.target.closest("#btn-source-dataset");
+        const failBtn = ev.target.closest("#btn-failed-dataset");
+        if (!srcBtn && !failBtn) return;
+        ev.preventDefault();
+        const kind = srcBtn ? "source" : "failed";
+        const relPath =
+          kind === "source"
+            ? evalReportDatasetPaths.source
+            : evalReportDatasetPaths.failed;
+        const title = kind === "source" ? "Source dataset" : "Failed prompts";
+        const panel = document.getElementById("dataset-json-panel");
+        if (datasetViewerActiveKind === kind && panel && !panel.hidden) {
+          hideDatasetJsonPanel();
+          return;
+        }
+        datasetViewerActiveKind = kind;
+        const url = new URL(relPath, window.location.href).href;
+        showDatasetJsonLoading(title, relPath);
+        try {
+          const res = await fetch(url, { cache: "no-store" });
+          if (!res.ok) {
+            showDatasetJsonFetchError(title, relPath, res.status, res.statusText);
+            return;
+          }
+          const payload = await res.json();
+          showDatasetJsonContent(title, relPath, payload);
+        } catch (e) {
+          showDatasetJsonFetchError(title, relPath, null, e.message || String(e));
+        }
+      });
+    }
+
     async function load() {
       const app = document.getElementById("app");
       const dualLayout = document.getElementById("hero-dual-layout");
@@ -927,6 +1103,8 @@
           subEl.innerHTML = `Loaded <code>${escapeHtml(sourceFile)}</code> (same directory as this page)`;
         }
 
+        setDatasetPathsFromReport(data);
+
         if (isDualReport(data)) {
           if (singleLayout) singleLayout.style.display = "none";
           if (dualLayout) {
@@ -941,6 +1119,7 @@
           app.innerHTML = renderReport(data);
         }
       } catch (err) {
+        resetDatasetToolbar();
         resetDualHeroLayout();
         setHeroModels(null);
         app.classList.remove("panel--load");
@@ -955,6 +1134,7 @@
     }
 
     wireJumpFailButtonsOnce();
+    wireDatasetViewerOnce();
     load();
   </script>
 </body>

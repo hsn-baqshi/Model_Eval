@@ -19,6 +19,7 @@ RUN_SUMMARY_KEYS = (
     "status",
     "fail_reason",
     "failed_example_index",
+    "failed_example_indices",
     "average_score",
     "evaluated_count",
     "total_count",
